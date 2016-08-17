@@ -31,6 +31,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <uuid/uuid.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -57,6 +59,7 @@ static int shouldDaemonize = 0;
 static bool verbose = false;
 static const char *pidFile = NULL;
 static const char *logFile = NULL;
+static uid_t uid = 0;
 static int sleepInterval = 1800;
 static int terminationPipe[2];
 static sig_atomic_t shouldIgnoreNextTermSignal = 0;
@@ -114,6 +117,18 @@ parseArguments(int argc, char *argv[], int offset) {
 			i++;
 		} else if (strcmp(argv[i], "--verbose") == 0) {
 			verbose = true;
+		} else if (strcmp(argv[i], "--user") == 0) {
+			const char *user = argv[i + 1];
+			struct passwd *pwUser = getpwnam(user);
+			if (pwUser == NULL) {
+				int e = errno;
+				fprintf(stderr, ERROR_PREFIX
+					"Cannot lookup user information for user %s, %s (errno %d)\n",
+					user, strerror(e), e);
+			}else{
+				uid = pwUser->pw_uid;
+			}
+			i++;
 		} else {
 			fprintf(stderr, ERROR_PREFIX ": unrecognized argument %s\n",
 				argv[i]);
@@ -150,11 +165,37 @@ setNonBlocking(int fd) {
 	}
 }
 
+static void down_privilege() {
+	if (getuid() == 0 && uid != 0) {
+		if (setreuid(uid,0) != 0) {
+			int e = errno;
+			fprintf(stderr, ERROR_PREFIX
+					": cannot set effective user to %d for sleeping: %s (errno %d)\n",
+					uid, strerror(e), e);
+			exit(1);
+		}
+	}
+}
+
+static void up_privilege() {
+	if (getuid() != 0 && uid != 0) {
+		if (setuid(0) != 0) {
+			int e = errno;
+			fprintf(stderr, ERROR_PREFIX
+					": cannot set effective user to %d for touching files: %s (errno %d)\n",
+					uid, strerror(e), e);
+			exit(1);
+		}
+	}
+}
+
 static void
 initialize(int argc, char *argv[], int offset) {
 	int e, fd;
 
 	parseArguments(argc, argv, offset);
+
+	down_privilege();
 
 	if (logFile != NULL) {
 		fd = open(logFile, O_WRONLY | O_APPEND | O_CREAT, 0644);
@@ -266,15 +307,22 @@ maybeWritePidfile() {
 	FILE *f;
 
 	if (pidFile != NULL) {
+		up_privilege();
 		f = fopen(pidFile, "w");
 		if (f != NULL) {
 			fprintf(f, "%d\n", (int) getpid());
+			if (fchmod(fileno(f), S_IRWXU|S_IRWXG|S_IROTH) == -1){
+				int e = errno;
+				fprintf(stderr, ERROR_PREFIX
+					": cannot change permissions on pid file %s, process may remain after passenger shutdown: %s (errno %d)\n", pidFile, strerror(e), e);
+			}
 			fclose(f);
 		} else {
 			fprintf(stderr, ERROR_PREFIX ": cannot open PID file %s for writing\n",
 				pidFile);
 			exit(1);
 		}
+		down_privilege();
 	}
 }
 
@@ -289,6 +337,7 @@ touchDir(const char *dir) {
 	pid_t pid;
 	int e, status;
 
+	up_privilege();
 	pid = fork();
 	if (pid == 0) {
 		close(terminationPipe[0]);
@@ -327,6 +376,7 @@ touchDir(const char *dir) {
 			exit(1);
 		}
 	}
+	down_privilege();
 }
 
 static int
@@ -365,6 +415,7 @@ performCleanup(const char *dir) {
 	pid_t pid;
 	int e, status;
 
+	up_privilege();
 	pid = fork();
 	if (pid == 0) {
 		close(terminationPipe[0]);
@@ -408,6 +459,7 @@ tempDirToucherMain(int argc, char *argv[]) {
 	DEBUG("TempDirToucher started");
 
 	while (1) {
+		up_privilege();
 		if (dirExists(dir)) {
 			DEBUG("Touching directory");
 			touchDir(dir);
@@ -415,6 +467,7 @@ tempDirToucherMain(int argc, char *argv[]) {
 				break;
 			}
 		} else {
+			down_privilege();
 			DEBUG("Directory no longer exists, exiting");
 			break;
 		}

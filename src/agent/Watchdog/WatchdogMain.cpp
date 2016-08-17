@@ -325,12 +325,19 @@ waitForStarterProcessOrWatchers(const WorkingObjectsPtr &wo, vector<AgentWatcher
 	}
 }
 
+string
+relative(string filename){
+	string dir = filename.substr(filename.find_last_of('/')+1);
+	P_NOTICE(dir);
+	return dir;
+}
+
 static vector<pid_t>
 readCleanupPids(const WorkingObjectsPtr &wo) {
 	vector<pid_t> result;
 
 	foreach (string filename, wo->cleanupPidfiles) {
-		FILE *f = fopen(filename.c_str(), "r");
+		FILE *f = fopen(relative(filename).c_str(), "r");
 		if (f != NULL) {
 			char buf[33];
 			size_t ret;
@@ -355,7 +362,10 @@ static void
 killCleanupPids(const vector<pid_t> &cleanupPids) {
 	foreach (pid_t pid, cleanupPids) {
 		P_DEBUG("Sending SIGTERM to cleanup PID " << pid);
-		kill(pid, SIGTERM);
+		if(kill(pid, SIGTERM) == -1){
+			int e = errno;
+			P_WARN("Failed to send SIGTERM to " << pid << ", error: " << e << " " << strerror(e));
+		}
 	}
 }
 
@@ -893,6 +903,15 @@ openReportFile(const WorkingObjectsPtr &wo) {
 }
 
 static void
+chdirToTmpDir() {
+	string str = agentsOptions->getStrSet("cleanup_pidfiles", false).front();
+	string dir = str.substr(0,str.find_last_of('/'));
+	if (chdir(dir.c_str()) == -1) {
+		throw RuntimeException("Cannot change working directory to " + dir);
+	}
+}
+
+static void
 lowerPrivilege() {
 	TRACE_POINT();
 	const VariantMap &options = *agentsOptions;
@@ -1269,6 +1288,7 @@ watchdogMain(int argc, char *argv[]) {
 		maybeDaemonize();
 		createPidFile();
 		openReportFile(wo);
+		chdirToTmpDir();
 		lowerPrivilege();
 		initializeWorkingObjects(wo, instanceDirToucher, uidBeforeLoweringPrivilege);
 		initializeAgentWatchers(wo, watchers);
