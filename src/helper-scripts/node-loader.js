@@ -31,6 +31,56 @@ var fs = require('fs');
 var net = require('net');
 var http = require('http');
 
+//Kill Node Cluster Module
+var Module = require('module');
+var originalRequire = Module.prototype.require;
+Module.prototype.require = function(){
+	if(arguments['0'] == 'cluster'){
+		console.error("You required the cluster module, which is incompatible with Passenger, a shim was returned.");
+		return {
+			disconnect: x=>false,
+			fork: x=>false,
+			isMaster: false,
+			isWorker: true,
+			schedulingPolicy: false,
+			settings: false,
+			setupMaster: x=>false,
+			worker: false,
+			workers: false,
+		};
+	}else{
+		return originalRequire.apply(this, arguments);
+	}
+};
+
+//Kill Meteor Cluster Module
+var vm = require('vm');
+var orig_func = vm.runInThisContext;
+vm.runInThisContext = function(){
+    var scriptPath = arguments['1'];
+    if(scriptPath.indexOf('meteorhacks_cluster') != -1){
+        console.error("You are using the Meteorhacks cluster package, which is incompatible with Passenger, a shim was returned.");
+        return (function(){
+            Package['meteorhacks:cluster'] = {
+				Cluster: {
+ 					_publicServices: {},
+					_registeredServices: {},
+					_discoveryBackends: { mongodb: {} },
+					connect: x=>false,
+					allowPublicAccess: x=>false,
+					discoverConnection: x=>false,
+					register: x=>false,
+					_isPublicService: x=>false,
+					registerDiscoveryBackend: x=>false,
+					_blockCallAgain: x=>false
+				}
+			};
+		});
+    }else{
+        return orig_func.apply(this, arguments);
+    }
+};
+
 var LineReader = require('phusion_passenger/line_reader').LineReader;
 var ustLog = require('phusion_passenger/ustrouter_connector');
 
@@ -38,7 +88,7 @@ var instrumentModulePaths = [ 'phusion_passenger/log_express', 'phusion_passenge
 var instrumentedModules = [];
 
 module.isApplicationLoader = true; // https://groups.google.com/forum/#!topic/compoundjs/4txxkNtROQg
-GLOBAL.PhusionPassenger = exports.PhusionPassenger = new EventEmitter();
+global.PhusionPassenger = exports.PhusionPassenger = new EventEmitter();
 var stdinReader = new LineReader(process.stdin);
 beginHandshake();
 readInitializationHeader();

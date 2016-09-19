@@ -6,6 +6,7 @@ Next version (not yet released)
  * Fixes permissions issue on Linux when setting OOM score after lowering privileges. Closes GH-1858.
  * [Standalone] Allows raw json envvars in Passengerfile.json. Closes GH-1837.
  * Fixes unaligned memory access in base64 decoder on platforms that have strict aliasing requirements (non x86/x86_64). Closes GH-1646.
+ * Passenger now reports when you try to use Node.js or Meteor clustering, and tries to continue with just a shim in place.
 
 
 Release 5.0.30
